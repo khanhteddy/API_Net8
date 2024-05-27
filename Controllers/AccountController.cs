@@ -279,14 +279,33 @@ namespace Net8Angular17.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<UserDetailModel>>> GetUsers()
         {
-            var users = await _userManager.Users.Select(u=> new UserDetailModel{
-                Id = u.Id,
-                Email=u.Email,
-                FullName=u.FullName,
-                //Roles=_userManager.GetRolesAsync(u).Result.ToArray()
-            }).ToListAsync();
+            // Fetch users first
+            var users = await _userManager.Users
+                .Select(u => new 
+                {
+                    u.Id,
+                    u.Email,
+                    u.FullName
+                }).ToListAsync();
 
-            return Ok(users);
+            // Fetch roles for each user
+            var userDetailModels = new List<UserDetailModel>();
+            foreach (var user in users)
+            {
+                var appUser = new AppUser { Id = user.Id, Email = user.Email, FullName = user.FullName };
+                var roles = await _userManager.GetRolesAsync(appUser);
+                userDetailModels.Add(new UserDetailModel
+                {
+                    Id = user.Id,
+                    Email = user.Email,
+                    FullName = user.FullName,
+                    Roles = roles.ToArray()
+                });
+            }
+
+            return Ok(userDetailModels);
         }
+
+
     }
 }
