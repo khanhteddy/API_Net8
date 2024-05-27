@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
@@ -96,6 +97,20 @@ namespace Net8Angular17.Controllers
                             }
                             await _userManager.AddToRoleAsync(user, AppRole.HR);
                             break;
+                        case "Accountant":
+                            if (!await _roleManager.RoleExistsAsync(AppRole.Accountant))
+                            {
+                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Accountant));
+                            }
+                            await _userManager.AddToRoleAsync(user, AppRole.Accountant);
+                            break;
+                        case "Warehouse":
+                            if (!await _roleManager.RoleExistsAsync(AppRole.Warehouse))
+                            {
+                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Warehouse));
+                            }
+                            await _userManager.AddToRoleAsync(user, AppRole.Warehouse);
+                            break;
                         default:
                             // Optionally, handle other roles or log unexpected values
                             await _userManager.AddToRoleAsync(user, AppRole.Customer);
@@ -116,14 +131,14 @@ namespace Net8Angular17.Controllers
         [AllowAnonymous]
         [HttpPost("login")]
 
-        public async Task<ActionResult<AuthResponseModel>> Login(LoginModel loginDto)
+        public async Task<ActionResult<AuthResponseModel>> Login(LoginModel loginModel)
         {
             if(!ModelState.IsValid)
             {
                return BadRequest(ModelState);
             }
 
-            var user = await _userManager.FindByEmailAsync(loginDto.Email);
+            var user = await _userManager.FindByEmailAsync(loginModel.Email);
 
             if(user is null)
             {
@@ -133,7 +148,7 @@ namespace Net8Angular17.Controllers
                 });
             }
 
-            var result = await _userManager.CheckPasswordAsync(user,loginDto.Password);
+            var result = await _userManager.CheckPasswordAsync(user,loginModel.Password);
 
             if(!result){
                 return Unauthorized(new AuthResponseModel{
@@ -156,6 +171,38 @@ namespace Net8Angular17.Controllers
 
 
 
+        [AllowAnonymous]
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword(ResetPasswordModel resetPasswordModel)
+        {
+            var user = await _userManager.FindByEmailAsync(resetPasswordModel.Email);
+            resetPasswordModel.Token = WebUtility.UrlDecode(resetPasswordModel.Token);
+
+            if (user is null)
+            {
+                return BadRequest(new AuthResponseModel
+                {
+                    IsSuccess = false,
+                    Message = "User does not exist with this email"
+                });
+            }
+
+            var result = await _userManager.ResetPasswordAsync(user, resetPasswordModel.Token, resetPasswordModel.NewPassword);
+            if (result.Succeeded)
+            {
+                return Ok(new AuthResponseModel
+                {
+                    IsSuccess = true,
+                    Message = "Password reset Successfully"
+                });
+            }
+
+            return BadRequest(new AuthResponseModel
+            {
+                IsSuccess = false,
+                Message = result.Errors.FirstOrDefault()!.Description
+            });
+        }
 
 
         private string GenerateToken(AppUser user){
