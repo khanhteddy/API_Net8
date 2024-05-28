@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Net;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -159,16 +160,88 @@ namespace Net8Angular17.Controllers
 
             
             var token = GenerateToken(user);
+            var refreshToken = GenerateRefreshToken();
+            _ = int.TryParse(_configuration.GetSection("JWT").GetSection("RefreshTokenValidityInDays").Value!, out int RefreshTokenValidityInDays);
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(RefreshTokenValidityInDays);
+            await _userManager.UpdateAsync(user);
 
             return Ok(new AuthResponseModel{
                 Token = token,
                 IsSuccess = true,
-                Message = "Login Success."
+                Message = "Login Success.",
+                RefreshToken = refreshToken
             });
-
-
         }
 
+        [AllowAnonymous]
+        [HttpPost("refresh-token")]
+
+        public async Task<ActionResult<AuthResponseModel>> RefreshToken(TokenModel token)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var principal = GetPrincipalFromExpiredToken(token.Token);
+            var user = await _userManager.FindByEmailAsync(token.Email);
+
+            if (principal is null || user is null || user.RefreshToken != token.RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+                return BadRequest(new AuthResponseModel
+                {
+                    IsSuccess = false,
+                    Message = "Invalid client request"
+                });
+
+            var newJwtToken = GenerateToken(user);
+            var newRefreshToken = GenerateRefreshToken();
+            _ = int.TryParse(_configuration.GetSection("JWTSetting").GetSection("RefreshTokenValidityIn").Value!, out int RefreshTokenValidityIn);
+
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(RefreshTokenValidityIn);
+
+            await _userManager.UpdateAsync(user);
+
+            return Ok(new AuthResponseModel
+            {
+                IsSuccess = true,
+                Token = newJwtToken,
+                RefreshToken = newRefreshToken,
+                Message = "Refreshed token successfully"
+            });
+        }
+
+        [HttpPost("change-password")]
+        public async Task<ActionResult> ChangePassword(ChangePasswordModel changePasswordModel)
+        {
+            var user = await _userManager.FindByEmailAsync(changePasswordModel.Email);
+            if (user is null)
+            {
+                return BadRequest(new AuthResponseModel
+                {
+                    IsSuccess = false,
+                    Message = "User does not exist with this email"
+                });
+            }
+
+            var result = await _userManager.ChangePasswordAsync(user, changePasswordModel.CurrentPassword, changePasswordModel.NewPassword);
+
+            if (result.Succeeded)
+            {
+                return Ok(new AuthResponseModel
+                {
+                    IsSuccess = true,
+                    Message = "Password changed successfully"
+                });
+            }
+
+            return BadRequest(new AuthResponseModel
+            {
+                IsSuccess = false,
+                Message = result.Errors.FirstOrDefault()!.Description
+            });
+        }
 
 
         [AllowAnonymous]
@@ -306,6 +379,33 @@ namespace Net8Angular17.Controllers
             return Ok(userDetailModels);
         }
 
+        private string GenerateRefreshToken()
+        {
+            var randomNumber = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber);
+        }
+
+        private ClaimsPrincipal? GetPrincipalFromExpiredToken(string token)
+        {
+            var tokenParameters = new TokenValidationParameters
+            {
+                ValidateAudience = false,
+                ValidateIssuer = false,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration.GetSection("JWT").GetSection("securityKey").Value!)),
+                ValidateLifetime = false
+            };
+
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var principal = tokenHandler.ValidateToken(token, tokenParameters, out SecurityToken securityToken);
+
+            if (securityToken is not JwtSecurityToken jwtSecurityToken || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+                throw new SecurityTokenException("Invalid token");
+
+            return principal;
+        }
 
     }
 }
