@@ -7,13 +7,18 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using Google.Apis.Auth;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Net8Angular17.Data;
 using Net8Angular17.Helpers;
 using Net8Angular17.Models;
+using Net8Angular17.Properties;
+using Net8Angular17.Repositories;
 using RestSharp;
 
 namespace Net8Angular17.Controllers
@@ -26,297 +31,92 @@ namespace Net8Angular17.Controllers
         private readonly UserManager<AppUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _configuration;
+        private readonly IAccountRepository _accountRepository;
+        private readonly ICacheRepository _cacheRepository;
+        private readonly DataContext _context;
 
 
-        public AccountController(UserManager<AppUser> userManager,
-        RoleManager<IdentityRole> roleManager,
-        IConfiguration configuration
+        // private readonly AccountRepository _authService;
+
+        public AccountController(
+            UserManager<AppUser> userManager,
+            RoleManager<IdentityRole> roleManager,
+            IConfiguration configuration,
+            IAccountRepository accountRepository,
+            ICacheRepository cacheRepository,
+            DataContext context
         )
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _configuration = configuration;
-            
+            _accountRepository = accountRepository;
+            _cacheRepository = cacheRepository;
+            _context = context;
         }
 
         [AllowAnonymous]
         [HttpPost("register")]
-        public async Task<ActionResult<string>> Register(RegisterModel registerModel)
+        public async Task<ActionResult<AuthResponseModel>> Register(RegisterModel registerModel)
         {
-            if(!ModelState.IsValid)
+            var response = await _accountRepository.Register(registerModel);
+            if (!response.IsSuccess)
             {
-                return BadRequest(ModelState);
+                return BadRequest(response);
             }
 
-            var user = new AppUser {
-                Email = registerModel.Email,
-                FullName = registerModel.FullName,
-                UserName = registerModel.Email
-            };
-
-            var result = await _userManager.CreateAsync(user,registerModel.Password);
-
-            if(!result.Succeeded)
-            {
-                return BadRequest(result.Errors);
-            }
-            
-            if(registerModel.Roles is null){
-                    //await _userManager.AddToRoleAsync(user,"User");
-                if (!await _roleManager.RoleExistsAsync(AppRole.Customer))
-				{
-					await _roleManager.CreateAsync(new IdentityRole(AppRole.Customer));
-				}
-				await _userManager.AddToRoleAsync(user, AppRole.Customer);
-            }
-            else
-            {
-                foreach (var role in registerModel.Roles)
-                {
-                    switch (role)
-                    {
-                        case "Admin":
-                            
-                            if (!await _roleManager.RoleExistsAsync(AppRole.Admin))
-                            {
-                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Admin));
-                            }
-                            await _userManager.AddToRoleAsync(user, AppRole.Admin);
-                            break;
-
-                        case "Manager":
-                            if (!await _roleManager.RoleExistsAsync(AppRole.Manager))
-                            {
-                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Manager));
-                            }
-                            await _userManager.AddToRoleAsync(user, AppRole.Manager);
-                            break;
-                        case "HR":
-                            if (!await _roleManager.RoleExistsAsync(AppRole.HR))
-                            {
-                                await _roleManager.CreateAsync(new IdentityRole(AppRole.HR));
-                            }
-                            await _userManager.AddToRoleAsync(user, AppRole.HR);
-                            break;
-                        case "Accountant":
-                            if (!await _roleManager.RoleExistsAsync(AppRole.Accountant))
-                            {
-                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Accountant));
-                            }
-                            await _userManager.AddToRoleAsync(user, AppRole.Accountant);
-                            break;
-                        case "Warehouse":
-                            if (!await _roleManager.RoleExistsAsync(AppRole.Warehouse))
-                            {
-                                await _roleManager.CreateAsync(new IdentityRole(AppRole.Warehouse));
-                            }
-                            await _userManager.AddToRoleAsync(user, AppRole.Warehouse);
-                            break;
-                        default:
-                            // Optionally, handle other roles or log unexpected values
-                            await _userManager.AddToRoleAsync(user, AppRole.Customer);
-                            break;
-                    }
-                }
-
-            }
-            
-        return Ok(new AuthResponseModel{
-            IsSuccess = true,
-            Message = "Account Created Sucessfully!"
-        });
-
+            return Ok(response);
         }
 
-        //api/account/login
         [AllowAnonymous]
         [HttpPost("login")]
-
         public async Task<ActionResult<AuthResponseModel>> Login(LoginModel loginModel)
         {
-            if(!ModelState.IsValid)
+            var response = await _accountRepository.Login(loginModel);
+            if (!response.IsSuccess)
             {
-               return BadRequest(ModelState);
+                return Unauthorized(response);
             }
 
-            var user = await _userManager.FindByEmailAsync(loginModel.Email);
-
-            if(user is null)
-            {
-                return Unauthorized(new AuthResponseModel{
-                    IsSuccess = false,
-                    Message = "User not found with this email",
-                });
-            }
-
-            var result = await _userManager.CheckPasswordAsync(user,loginModel.Password);
-
-            if(!result){
-                return Unauthorized(new AuthResponseModel{
-                    IsSuccess=false,
-                    Message= "Invalid Password."
-                });
-            }
-
-            
-            var token = GenerateToken(user);
-            var refreshToken = GenerateRefreshToken();
-            _ = int.TryParse(_configuration.GetSection("JWT").GetSection("RefreshTokenValidityInDays").Value!, out int RefreshTokenValidityInDays);
-            user.RefreshToken = refreshToken;
-            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(RefreshTokenValidityInDays);
-            await _userManager.UpdateAsync(user);
-
-            return Ok(new AuthResponseModel{
-                Token = token,
-                IsSuccess = true,
-                Message = "Login Success.",
-                RefreshToken = refreshToken
-            });
+            return Ok(response);
         }
 
         [AllowAnonymous]
         [HttpPost("refresh-token")]
-
         public async Task<ActionResult<AuthResponseModel>> RefreshToken(TokenModel token)
         {
-            if (!ModelState.IsValid)
+            var response = await _accountRepository.RefreshToken(token);
+            if (!response.IsSuccess)
             {
-                return BadRequest(ModelState);
+                return BadRequest(response);
             }
 
-            var principal = GetPrincipalFromExpiredToken(token.Token);
-            var user = await _userManager.FindByEmailAsync(token.Email);
-
-            if (principal is null || user is null || user.RefreshToken != token.RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
-                return BadRequest(new AuthResponseModel
-                {
-                    IsSuccess = false,
-                    Message = "Invalid client request"
-                });
-
-            var newJwtToken = GenerateToken(user);
-            var newRefreshToken = GenerateRefreshToken();
-            _ = int.TryParse(_configuration.GetSection("JWTSetting").GetSection("RefreshTokenValidityIn").Value!, out int RefreshTokenValidityIn);
-
-            user.RefreshToken = newRefreshToken;
-            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddMinutes(RefreshTokenValidityIn);
-
-            await _userManager.UpdateAsync(user);
-
-            return Ok(new AuthResponseModel
-            {
-                IsSuccess = true,
-                Token = newJwtToken,
-                RefreshToken = newRefreshToken,
-                Message = "Refreshed token successfully"
-            });
+            return Ok(response);
         }
 
         [HttpPost("change-password")]
-        public async Task<ActionResult> ChangePassword(ChangePasswordModel changePasswordModel)
+        public async Task<ActionResult<AuthResponseModel>> ChangePassword(ChangePasswordModel changePasswordModel)
         {
-            var user = await _userManager.FindByEmailAsync(changePasswordModel.Email);
-            if (user is null)
+            var response = await _accountRepository.ChangePassword(changePasswordModel);
+            if (!response.IsSuccess)
             {
-                return BadRequest(new AuthResponseModel
-                {
-                    IsSuccess = false,
-                    Message = "User does not exist with this email"
-                });
+                return BadRequest(response);
             }
 
-            var result = await _userManager.ChangePasswordAsync(user, changePasswordModel.CurrentPassword, changePasswordModel.NewPassword);
-
-            if (result.Succeeded)
-            {
-                return Ok(new AuthResponseModel
-                {
-                    IsSuccess = true,
-                    Message = "Password changed successfully"
-                });
-            }
-
-            return BadRequest(new AuthResponseModel
-            {
-                IsSuccess = false,
-                Message = result.Errors.FirstOrDefault()!.Description
-            });
+            return Ok(response);
         }
-
 
         [AllowAnonymous]
         [HttpPost("reset-password")]
-        public async Task<IActionResult> ResetPassword(ResetPasswordModel resetPasswordModel)
+        public async Task<ActionResult<AuthResponseModel>> ResetPassword(ResetPasswordModel resetPasswordModel)
         {
-            var user = await _userManager.FindByEmailAsync(resetPasswordModel.Email);
-            resetPasswordModel.Token = WebUtility.UrlDecode(resetPasswordModel.Token);
-
-            if (user is null)
+            var response = await _accountRepository.ResetPassword(resetPasswordModel);
+            if (!response.IsSuccess)
             {
-                return BadRequest(new AuthResponseModel
-                {
-                    IsSuccess = false,
-                    Message = "User does not exist with this email"
-                });
+                return BadRequest(response);
             }
 
-            var result = await _userManager.ResetPasswordAsync(user, resetPasswordModel.Token, resetPasswordModel.NewPassword);
-            if (result.Succeeded)
-            {
-                return Ok(new AuthResponseModel
-                {
-                    IsSuccess = true,
-                    Message = "Password reset Successfully"
-                });
-            }
-
-            return BadRequest(new AuthResponseModel
-            {
-                IsSuccess = false,
-                Message = result.Errors.FirstOrDefault()!.Description
-            });
-        }
-
-
-        private string GenerateToken(AppUser user){
-            var tokenHandler = new JwtSecurityTokenHandler();
-            
-            var key = Encoding.ASCII.GetBytes(_configuration.GetSection("JWT").GetSection("securityKey").Value!);
-
-            var roles = _userManager.GetRolesAsync(user).Result;
-
-            List<Claim> claims = 
-            [
-                new (JwtRegisteredClaimNames.Email,user.Email??""),
-                new (JwtRegisteredClaimNames.Name,user.FullName??""),
-                new (JwtRegisteredClaimNames.NameId,user.Id ??""),
-                new (JwtRegisteredClaimNames.Aud,_configuration.GetSection("JWT").GetSection("validAudience").Value!),
-                new (JwtRegisteredClaimNames.Iss,_configuration.GetSection("JWT").GetSection("validIssuer").Value!)
-            ];
-
-
-            foreach(var role in roles)
-
-            {
-                claims.Add(new Claim(ClaimTypes.Role,role.ToString()));
-            }
-
-            var tokenDescriptor = new SecurityTokenDescriptor
-            {
-                Subject = new ClaimsIdentity(claims),
-                Expires = DateTime.UtcNow.AddDays(1),
-                SigningCredentials = new SigningCredentials(
-                    new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha256
-                )
-            };
-
-
-            var token  = tokenHandler.CreateToken(tokenDescriptor);
-
-            return tokenHandler.WriteToken(token);
-           
-
+            return Ok(response);
         }
 
         //api/account/detail
@@ -324,88 +124,79 @@ namespace Net8Angular17.Controllers
         public async Task<ActionResult<UserDetailModel>> GetUserDetail()
         {
             var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            var user = await _userManager.FindByIdAsync(currentUserId!);
+            var userDetail = await _accountRepository.GetUserDetailAsync(currentUserId);
 
-
-            if(user is null)
+            if (userDetail is null)
             {
-                return NotFound(new AuthResponseModel{
+                return NotFound(new AuthResponseModel
+                {
                     IsSuccess = false,
                     Message = "User not found"
                 });
             }
 
-            return Ok(new UserDetailModel{
-                Id = user.Id,
-                Email = user.Email,
-                FullName = user.FullName,
-                Roles = [..await _userManager.GetRolesAsync(user)],
-                PhoneNumber = user.PhoneNumber,
-                PhoneNumberConfirmed = user.PhoneNumberConfirmed,
-                AccessFailedCount = user.AccessFailedCount,
-
-            });
-
+            return Ok(userDetail);
         }
 
 
         [HttpGet]
         public async Task<ActionResult<IEnumerable<UserDetailModel>>> GetUsers()
         {
-            // Fetch users first
-            var users = await _userManager.Users
-                .Select(u => new 
-                {
-                    u.Id,
-                    u.Email,
-                    u.FullName
-                }).ToListAsync();
+            var users = await _accountRepository.GetUsersAsync();
+            return Ok(users);
+        }
 
-            // Fetch roles for each user
-            var userDetailModels = new List<UserDetailModel>();
-            foreach (var user in users)
+        [AllowAnonymous]
+        [HttpPost("google-login")]
+        public async Task<ActionResult<AuthResponseModel>> GoogleLogin(GoogleLoginModel googleLoginModel)
+        {
+            var response = await _accountRepository.GoogleLogin(googleLoginModel);
+            if (!response.IsSuccess)
             {
-                var appUser = new AppUser { Id = user.Id, Email = user.Email, FullName = user.FullName };
-                var roles = await _userManager.GetRolesAsync(appUser);
-                userDetailModels.Add(new UserDetailModel
-                {
-                    Id = user.Id,
-                    Email = user.Email,
-                    FullName = user.FullName,
-                    Roles = roles.ToArray()
-                });
+                return Unauthorized(response);
             }
 
-            return Ok(userDetailModels);
+            return Ok(response);
         }
-
-        private string GenerateRefreshToken()
+        [AllowAnonymous]
+        [HttpGet("driver")]
+        public async Task<IActionResult> Get()
         {
-            var randomNumber = new byte[32];
-            using var rng = RandomNumberGenerator.Create();
-            rng.GetBytes(randomNumber);
-            return Convert.ToBase64String(randomNumber);
-        }
-
-        private ClaimsPrincipal? GetPrincipalFromExpiredToken(string token)
-        {
-            var tokenParameters = new TokenValidationParameters
+            var cacheData = _cacheRepository.GetData<IEnumerable<Drive>>("drive");
+            if (cacheData != null && cacheData.Count() > 0)
             {
-                ValidateAudience = false,
-                ValidateIssuer = false,
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration.GetSection("JWT").GetSection("securityKey").Value!)),
-                ValidateLifetime = false
-            };
+                return Ok(cacheData);
+            }
 
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var principal = tokenHandler.ValidateToken(token, tokenParameters, out SecurityToken securityToken);
-
-            if (securityToken is not JwtSecurityToken jwtSecurityToken || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
-                throw new SecurityTokenException("Invalid token");
-
-            return principal;
+            cacheData = await _context.Drive.ToListAsync();
+            var expriryTime = DateTimeOffset.Now.AddSeconds(15);
+            _cacheRepository.SetData<IEnumerable<Drive>>("drive", cacheData, expriryTime);
+            
+            return Ok(cacheData);
         }
+        [AllowAnonymous]
+        [HttpPost("addDrive")]
+        public async Task<IActionResult> Post(Drive value)
+        {
+            var addObject = await _context.Drive.AddAsync(value);
+            var expriryTime = DateTimeOffset.Now.AddSeconds(30);
+            _cacheRepository.SetData<Drive>($"drive{value.Id}", addObject.Entity, expriryTime);
+            await _context.SaveChangesAsync();
+            return Ok(addObject.Entity);
+        }
+        [AllowAnonymous]
+        [HttpDelete("deleteDrive")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            var exist = _context.Drive.FirstOrDefaultAsync(x => x.Id == id);
+            if (exist != null)
+            {
+                _context.Remove(exist);
+                _cacheRepository.RemoveData($"drive{id}");
+                return NoContent();
+            }
 
+            return NotFound();
+        }
     }
 }

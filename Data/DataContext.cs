@@ -14,5 +14,6 @@ namespace Net8Angular17.Data
         {
 
         }
+        public DbSet<Drive> Drive { get; set; }
     }
 }
